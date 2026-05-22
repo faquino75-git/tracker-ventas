@@ -8,8 +8,8 @@
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Segoe UI',system-ui,sans-serif;background:#F8FAFC}
     input,button{font-family:inherit}
-    @media print{button{display:none!important}*{box-shadow:none!important}}
     @keyframes slide{0%{transform:translateX(-250%)}100%{transform:translateX(400%)}}
+    @media print{.no-print{display:none!important}*{box-shadow:none!important}}
   </style>
 </head>
 <body>
@@ -17,9 +17,8 @@
 <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script>
-// Make hooks available in scope
-const useState = React.useState;
-const useEffect = React.useEffect;
+const useState    = React.useState;
+const useEffect   = React.useEffect;
 const useCallback = React.useCallback;
 
 "use strict";
@@ -403,9 +402,17 @@ function App() {
                                 "\uD83D\uDCDE Llamadas de ",
                                 mgCallModal),
                             React.createElement("button", { onClick: () => setMgCallModal(null), style: { background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748B" } }, "\u2715")),
-                        React.createElement("div", { style: { fontSize: "12px", color: "#64748B", marginBottom: "14px" } },
-                            calls.length,
-                            " llamada(s) este mes"),
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" } },
+                            React.createElement("div", { style: { fontSize: "12px", color: "#64748B" } },
+                                calls.length,
+                                " llamada(s) este mes"),
+                            React.createElement("button", { onClick: () => {
+                                    const w = window.open('', '_blank');
+                                    const rows = calls.map((e, i) => `<tr><td>${i + 1}</td><td>${e.name}</td><td>${e.phone}</td><td>${e.date}</td><td>${e.time}</td></tr>`).join('');
+                                    w.document.write(`<html><head><title>Llamadas ${mgCallModal}</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f1f5f9}h2{margin-bottom:16px}</style></head><body><h2>📞 Llamadas de ${mgCallModal} — ${new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })}</h2><table><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Fecha</th><th>Hora</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+                                    w.document.close();
+                                    w.print();
+                                }, style: { padding: "5px 12px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "6px", fontSize: "11px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "\uD83D\uDDA8\uFE0F Imprimir")),
                         calls.length === 0 ? React.createElement("div", { style: { textAlign: "center", padding: "30px", color: "#94A3B8" } },
                             React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83D\uDCF5"),
                             React.createElement("div", null, "No hay llamadas registradas"))
@@ -706,10 +713,19 @@ function App() {
                     "\u26A0\uFE0F ",
                     callErr),
                 getCallLog(repName, showCallModal).length > 0 && (React.createElement("div", { style: { marginBottom: "14px" } },
-                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" } },
-                        "Registradas (",
-                        getCallLog(repName, showCallModal).length,
-                        ")"),
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } },
+                        React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase" } },
+                            "Registradas (",
+                            getCallLog(repName, showCallModal).length,
+                            ")"),
+                        React.createElement("button", { onClick: () => {
+                                const calls = getCallLog(repName, showCallModal);
+                                const w = window.open('', '_blank');
+                                const rows = calls.map((e, i) => `<tr><td>${i + 1}</td><td>${e.name}</td><td>${e.phone}</td><td>${e.time}</td></tr>`).join('');
+                                w.document.write(`<html><head><title>Llamadas ${showCallModal}</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f1f5f9}h2{margin-bottom:16px}</style></head><body><h2>📞 ${repName} — ${showCallModal}</h2><table><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Hora</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+                                w.document.close();
+                                w.print();
+                            }, style: { padding: "3px 8px", background: "#059669", color: "#FFF", border: "none", borderRadius: "5px", fontSize: "10px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "\uD83D\uDDA8\uFE0F")),
                     React.createElement("div", { style: { maxHeight: "130px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "5px" } }, getCallLog(repName, showCallModal).map((e, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "8px", padding: "7px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: "7px" } },
                         React.createElement("span", { style: { fontSize: "12px" } }, "\u2705"),
                         React.createElement("div", { style: { flex: 1 } },
@@ -1001,7 +1017,6 @@ function App() {
 const NB = { background: "#FFF", border: "2px solid #E2E8F0", color: "#64748B", fontSize: "11px", fontWeight: "600", padding: "5px 12px", borderRadius: "6px", cursor: "pointer", fontFamily: "inherit" };
 
 
-// Mount app
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
 </script>
 </body>
