@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>Tracker Ventas Autos 🚗</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#F8FAFC}
+    input,button{font-family:inherit}
+    @media print{button{display:none!important}*{box-shadow:none!important}}
+    @keyframes slide{0%{transform:translateX(-250%)}100%{transform:translateX(400%)}}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+// Make hooks available in scope
+const useState = React.useState;
+const useEffect = React.useEffect;
+const useCallback = React.useCallback;
+
+"use strict";
+// ── Supabase ──────────────────────────────────────────────────────
+const SB_URL = "https://evswqggquukmyrprrlmx.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2c3dxZ2dxdXVrbXlycHJybG14Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyNzg4NzUsImV4cCI6MjA5NDg1NDg3NX0.aCYoAiLb6n7XOohVQj5EWhEGF6qOjBsr7_CT5hl-9Fc";
+const H = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}` };
+const sbGet = async (table, filter = "") => {
+    try {
+        const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { headers: H });
+        if (!r.ok) {
+            console.error("sbGet", r.status, await r.text());
+            return null;
+        }
+        return r.json();
+    }
+    catch (e) {
+        console.error("sbGet failed", e);
+        return null;
+    }
+};
+const sbUpsert = async (table, body) => {
+    try {
+        const headers = { ...H, "Prefer": "resolution=merge-duplicates,return=minimal" };
+        const r = await fetch(`${SB_URL}/rest/v1/${table}`, { method: "POST", headers, body: JSON.stringify(body) });
+        if (!r.ok) {
+            const t = await r.text();
+            console.error("sbUpsert", r.status, t);
+            return false;
+        }
+        return true;
+    }
+    catch (e) {
+        console.error("sbUpsert failed", e);
+        return false;
+    }
+};
+const sbDelete = async (table, filter) => {
+    try {
+        const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: H });
+        return r.ok;
+    }
+    catch (e) {
+        return false;
+    }
+};
+// ── Constantes ────────────────────────────────────────────────────
+const MANAGER_PASS = "gerente2024";
+const FUNNEL = { llamadas: 57.5, contactos: 14.375, citas: 5.75, visitas: 3.375, demos: 3, cotizaciones: 2.875, solicitudes: 2.5, ventas: 1 };
+const METRICS = Object.keys(FUNNEL);
+const LABELS = { llamadas: "Llamadas", contactos: "Contactos", citas: "Citas", visitas: "Visitas/Show", demos: "Demostraciones", cotizaciones: "Cotizaciones", solicitudes: "Sol.Financiamiento", ventas: "Ventas" };
+const ICONS = { llamadas: "📞", contactos: "🗣️", citas: "📅", visitas: "🏠", demos: "🚗", cotizaciones: "📄", solicitudes: "🏦", ventas: "✅" };
+const COLORS = { llamadas: "#2563EB", contactos: "#7C3AED", citas: "#D97706", visitas: "#059669", demos: "#0891B2", cotizaciones: "#DB2777", solicitudes: "#4F46E5", ventas: "#DC2626" };
+// ── Helpers fecha ─────────────────────────────────────────────────
+const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const today = () => new Date();
+const todayKey = () => dateKey(today());
+const offsetDay = (n) => { const d = today(); d.setDate(d.getDate() + n); return d; };
+const monthDays = (y, m) => new Date(y, m + 1, 0).getDate();
+const fmtFull = (d) => d.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const fmtShort = (d) => d.toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short" });
+// ── Metas ─────────────────────────────────────────────────────────
+const buildMonthly = (v) => { const r = {}; METRICS.forEach(m => { r[m] = Math.round(Math.max(1, v) * FUNNEL[m]); }); return r; };
+const buildDaily = (v, d) => { const r = {}; METRICS.forEach(m => { r[m] = Math.max(1, Math.ceil(Math.max(1, v) * FUNNEL[m] / Math.max(1, d))); }); return r; };
+const remainingDays = (daysOff = []) => { const t = today(), total = monthDays(t.getFullYear(), t.getMonth()), avail = total - t.getDate() + 1, tk = todayKey(); return Math.max(1, avail - daysOff.filter(d => d >= tk).length); };
+// ── Pace ──────────────────────────────────────────────────────────
+const paceOf = (actual, goal, elapsed, total) => { if (!goal || !total)
+    return null; const exp = (elapsed / total) * 100, act = (actual / goal) * 100; if (act >= 100)
+    return "done"; if (act - exp >= 5)
+    return "ahead"; if (act - exp >= -8)
+    return "ok"; return "behind"; };
+const PS = { done: { label: "✓ Meta", bg: "#ECFDF5", border: "#6EE7B7", color: "#059669" }, ahead: { label: "↑ Adelantado", bg: "#EFF6FF", border: "#93C5FD", color: "#1D4ED8" }, ok: { label: "→ En ritmo", bg: "#F0FDF4", border: "#86EFAC", color: "#16A34A" }, behind: { label: "↓ Atrasado", bg: "#FEF2F2", border: "#FECACA", color: "#DC2626" } };
+const PaceBadge = ({ status }) => { if (!status)
+    return null; const s = PS[status]; return React.createElement("span", { style: { fontSize: "9px", fontWeight: "700", padding: "2px 7px", borderRadius: "20px", background: s.bg, border: `1px solid ${s.border}`, color: s.color, whiteSpace: "nowrap" } }, s.label); };
+const Bar = ({ actual, goal, color, h = 6 }) => { const p = Math.min(100, goal > 0 ? Math.round((actual / goal) * 100) : 0); return React.createElement("div", { style: { background: "#F1F5F9", borderRadius: "4px", height: h, overflow: "hidden" } },
+    React.createElement("div", { style: { width: `${p}%`, height: "100%", background: p >= 100 ? "#10B981" : color, borderRadius: "4px", transition: "width 0.3s" } })); };
+function GoalModal({ title, value, onSave, onClose, color = "#DC2626", bg = "#FEF2F2", border = "#FECACA" }) {
+    const [v, setV] = useState(String(value));
+    const n = Math.max(1, parseInt(v) || 1);
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "22px", width: "100%", maxWidth: "320px", boxShadow: "0 8px 32px rgba(0,0,0,0.14)" } },
+            React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A", marginBottom: "14px" } }, title),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "8px" } },
+                React.createElement("button", { onClick: () => setV(x => String(Math.max(1, (parseInt(x) || 1) - 1))), style: { width: "36px", height: "36px", borderRadius: "8px", border: "2px solid #E2E8F0", background: "#F8FAFC", fontSize: "20px", cursor: "pointer", fontFamily: "inherit", color: "#64748B" } }, "\u2212"),
+                React.createElement("input", { type: "number", min: "1", value: v, onChange: e => setV(e.target.value), style: { flex: 1, textAlign: "center", fontSize: "32px", fontWeight: "800", color, border: `2px solid ${border}`, borderRadius: "8px", padding: "6px", outline: "none", fontFamily: "inherit", background: bg } }),
+                React.createElement("button", { onClick: () => setV(x => String((parseInt(x) || 1) + 1)), style: { width: "36px", height: "36px", borderRadius: "8px", border: "2px solid #E2E8F0", background: "#F8FAFC", fontSize: "20px", cursor: "pointer", fontFamily: "inherit", color: "#64748B" } }, "+")),
+            React.createElement("div", { style: { textAlign: "center", fontSize: "11px", color: "#94A3B8", marginBottom: "18px" } }, "ventas / mes"),
+            React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                React.createElement("button", { onClick: onClose, style: { flex: 1, padding: "10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "13px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"),
+                React.createElement("button", { onClick: () => onSave(n), style: { flex: 2, padding: "10px", background: color, border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", color: "#FFF", cursor: "pointer", fontFamily: "inherit" } }, "Guardar"))));
+}
+// ── App ───────────────────────────────────────────────────────────
+function App() {
+    const [view, setView] = useState("login");
+    const [repName, setRepName] = useState("");
+    const [mgUnlocked, setMgUnlocked] = useState(false);
+    const [mgPass, setMgPass] = useState("");
+    const [mgPassErr, setMgPassErr] = useState(false);
+    const [selRep, setSelRep] = useState(null);
+    const [repPwd, setRepPwd] = useState("");
+    const [repPwdErr, setRepPwdErr] = useState(false);
+    const [tab, setTab] = useState("hoy");
+    const [dayOff, setDayOff] = useState(0);
+    const [semOff, setSemOff] = useState(0);
+    const [showDaysOff, setShowDaysOff] = useState(false);
+    const [showCallModal, setShowCallModal] = useState(null);
+    const [callName, setCallName] = useState("");
+    const [callPhone, setCallPhone] = useState("");
+    const [callErr, setCallErr] = useState("");
+    const [clientModal, setClientModal] = useState(null);
+    const [editRepGoal, setEditRepGoal] = useState(null);
+    const [showAddRep, setShowAddRep] = useState(false);
+    const [newName, setNewName] = useState("");
+    const [newGoal, setNewGoal] = useState("8");
+    const [newPass, setNewPass] = useState("");
+    const [delRep, setDelRep] = useState(null);
+    const [showMgrGoal, setShowMgrGoal] = useState(false);
+    const [mgCallModal, setMgCallModal] = useState(null);
+    const [mgTab, setMgTab] = useState("resumen");
+    const [rankMetric, setRankMetric] = useState("ventas");
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [syncErr, setSyncErr] = useState(false);
+    // ── Datos en memoria (misma estructura que antes) ──
+    const [data, setData] = useState({});
+    const [cfg, setCfg] = useState({ mgrGoal: 85, reps: {}, daysOff: {}, archivedPipeline: [] });
+    // ── Cargar datos desde Supabase al iniciar ──
+    useEffect(() => {
+        (async () => {
+            setLoading(true);
+            try {
+                // Load config
+                const cfgRows = await sbGet("tracker_config", "key=eq.main");
+                if (cfgRows?.[0]?.value)
+                    setCfg(cfgRows[0].value);
+                // Load activity data
+                const dataRows = await sbGet("tracker_data", "select=rep_name,date_key,data_json");
+                if (dataRows) {
+                    const rebuilt = {};
+                    dataRows.forEach(row => {
+                        if (!rebuilt[row.rep_name])
+                            rebuilt[row.rep_name] = {};
+                        rebuilt[row.rep_name][row.date_key] = row.data_json || {};
+                    });
+                    setData(rebuilt);
+                }
+            }
+            catch (e) {
+                setSyncErr(true);
+            }
+            setLoading(false);
+        })();
+    }, []);
+    // ── Guardar config en Supabase ──
+    const saveCfg = useCallback(async (newCfg) => {
+        setCfg(newCfg);
+        setSaving(true);
+        await sbUpsert("tracker_config", [{ key: "main", value: newCfg }]);
+        setSaving(false);
+    }, []);
+    // ── Guardar día de un rep en Supabase ──
+    const saveRepDay = useCallback(async (rep, dk, dayData) => {
+        setData(p => ({ ...p, [rep]: { ...p[rep], [dk]: dayData } }));
+        setSaving(true);
+        await sbUpsert("tracker_data", [{ rep_name: rep, date_key: dk, data_json: dayData }]);
+        setSaving(false);
+    }, []);
+    // ── Helpers de datos ──
+    const reps = Object.keys(data);
+    const repGoal = (n) => cfg.reps[n]?.goal || 8;
+    const repPass = (n) => cfg.reps[n]?.pass || "";
+    const repDaysOff = (n) => cfg.daysOff?.[n] || [];
+    const getDayVal = (rep, dk, m) => data[rep]?.[dk]?.[m] ?? 0;
+    const getCallLog = (rep, dk) => data[rep]?.[dk]?.llamadas_log || [];
+    const getActLog = (rep, dk, m) => data[rep]?.[dk]?.[`${m}_log`] || [];
+    const addCall = (rep, dk, entry) => {
+        const log = [...getCallLog(rep, dk), entry];
+        const day = { ...(data[rep]?.[dk] || {}), llamadas: log.length, llamadas_log: log };
+        saveRepDay(rep, dk, day);
+    };
+    const removeCall = (rep, dk, idx) => {
+        const log = getCallLog(rep, dk).filter((_, i) => i !== idx);
+        const day = { ...(data[rep]?.[dk] || {}), llamadas: log.length, llamadas_log: log };
+        saveRepDay(rep, dk, day);
+    };
+    const addActivityForClient = (rep, dk, metric, client) => {
+        const existing = getActLog(rep, dk, metric);
+        if (existing.find(e => e.name === client.name && e.phone === client.phone))
+            return;
+        const newLog = [...existing, { ...client, time: new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) }];
+        const day = { ...(data[rep]?.[dk] || {}), [metric]: newLog.length, [`${metric}_log`]: newLog };
+        saveRepDay(rep, dk, day);
+    };
+    const removeActivity = (rep, dk, metric, idx) => {
+        const log = getActLog(rep, dk, metric).filter((_, i) => i !== idx);
+        const day = { ...(data[rep]?.[dk] || {}), [metric]: log.length, [`${metric}_log`]: log };
+        saveRepDay(rep, dk, day);
+    };
+    const monthTotal = (rep, metric) => {
+        const t = today(), pfx = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
+        return Object.entries(data[rep] || {}).filter(([k]) => k.startsWith(pfx)).reduce((s, [, d]) => s + (d[metric] || 0), 0);
+    };
+    const allMonthCalls = (rep) => {
+        const t = today(), pfx = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
+        return Object.entries(data[rep] || {}).filter(([k]) => k.startsWith(pfx)).flatMap(([dk, d]) => (d.llamadas_log || []).map(e => ({ ...e, date: dk })));
+    };
+    // ── Acciones manager ──
+    const createRep = () => {
+        const name = newName.trim();
+        if (!name || !newPass.trim())
+            return;
+        const goal = Math.max(1, parseInt(newGoal) || 8);
+        const newCfg = { ...cfg, reps: { ...cfg.reps, [name]: { goal, pass: newPass.trim() } } };
+        setData(p => p[name] ? p : { ...p, [name]: {} });
+        saveCfg(newCfg);
+        setNewName("");
+        setNewGoal("8");
+        setNewPass("");
+        setShowAddRep(false);
+    };
+    const removeRep = (name) => {
+        const newCfg = { ...cfg, reps: Object.fromEntries(Object.entries(cfg.reps).filter(([k]) => k !== name)) };
+        setData(p => { const n = { ...p }; delete n[name]; return n; });
+        sbDelete("tracker_data", `rep_name=eq.${encodeURIComponent(name)}`);
+        saveCfg(newCfg);
+        setDelRep(null);
+    };
+    const saveRepGoal = (name, val) => { saveCfg({ ...cfg, reps: { ...cfg.reps, [name]: { ...cfg.reps[name], goal: val } } }); setEditRepGoal(null); };
+    const toggleDayOff = (rep, dk) => { const curr = repDaysOff(rep), next = curr.includes(dk) ? curr.filter(x => x !== dk) : [...curr, dk]; saveCfg({ ...cfg, daysOff: { ...cfg.daysOff, [rep]: next } }); };
+    const archivePipeline = (key) => { saveCfg({ ...cfg, archivedPipeline: [...(cfg.archivedPipeline || []), { key, archivedAt: new Date().toLocaleDateString("es-MX") }] }); };
+    const avail = (rep) => remainingDays(repDaysOff(rep));
+    const monthly = (rep) => buildMonthly(repGoal(rep));
+    const daily = (rep) => buildDaily(repGoal(rep), avail(rep));
+    const t = today(), tk = todayKey();
+    const elapsed = t.getDate(), totalMo = monthDays(t.getFullYear(), t.getMonth());
+    const weekDays = (off = 0) => { const sun = new Date(t); sun.setDate(t.getDate() - t.getDay() + off * 7); return Array.from({ length: 7 }, (_, i) => { const d = new Date(sun); d.setDate(sun.getDate() + i); return d; }); };
+    // ── Loading screen ──
+    if (loading)
+        return (React.createElement("div", { style: { minHeight: "100vh", background: "#F8FAFC", fontFamily: "'Segoe UI',system-ui,sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px" } },
+            React.createElement("div", { style: { fontSize: "40px" } }, "\uD83D\uDE97"),
+            React.createElement("div", { style: { fontSize: "16px", fontWeight: "700", color: "#0F172A" } }, "Tracker Ventas Autos"),
+            React.createElement("div", { style: { fontSize: "13px", color: "#64748B" } }, "Conectando con Supabase..."),
+            React.createElement("div", { style: { width: "200px", height: "4px", background: "#E2E8F0", borderRadius: "4px", overflow: "hidden" } },
+                React.createElement("div", { style: { width: "40%", height: "100%", background: "#2563EB", borderRadius: "4px", animation: "slide 1s infinite" } })),
+            syncErr && React.createElement("div", { style: { fontSize: "12px", color: "#DC2626", fontWeight: "600" } }, "\u26A0\uFE0F Error de conexi\u00F3n \u2014 verifica tu internet"),
+            React.createElement("style", null, `@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}`)));
+    // ── LOGIN ──
+    if (view === "login")
+        return (React.createElement("div", { style: { minHeight: "100vh", background: "#F8FAFC", fontFamily: "'Segoe UI',system-ui,sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" } },
+            React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83D\uDE97"),
+            React.createElement("div", { style: { fontSize: "20px", fontWeight: "700", color: "#0F172A", marginBottom: "2px" } }, "Tracker Ventas Autos"),
+            React.createElement("div", { style: { fontSize: "13px", color: "#64748B", marginBottom: "24px" } }, "Sistema de seguimiento de actividad"),
+            saving && React.createElement("div", { style: { fontSize: "11px", color: "#2563EB", marginBottom: "8px" } }, "\u27F3 Sincronizando..."),
+            React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "22px", width: "100%", maxWidth: "340px", boxShadow: "0 2px 12px rgba(0,0,0,0.06)" } },
+                !selRep ? (React.createElement(React.Fragment, null,
+                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "12px" } }, "Selecciona tu nombre"),
+                    reps.length === 0 ? (React.createElement("div", { style: { textAlign: "center", padding: "20px", color: "#94A3B8", background: "#F8FAFC", borderRadius: "8px", border: "1px dashed #E2E8F0", marginBottom: "12px" } },
+                        React.createElement("div", { style: { fontSize: "24px", marginBottom: "6px" } }, "\uD83D\uDC64"),
+                        React.createElement("div", { style: { fontSize: "12px" } }, "El gerente a\u00FAn no ha creado usuarios"))) : (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginBottom: "12px" } }, reps.map(r => (React.createElement("button", { key: r, onClick: () => { setSelRep(r); setRepPwd(""); setRepPwdErr(false); }, style: { width: "100%", padding: "10px 14px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" } },
+                        React.createElement("div", { style: { width: "32px", height: "32px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "800", color: "#1D4ED8", flexShrink: 0 } }, r.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "13px", fontWeight: "600", color: "#0F172A" } }, r),
+                            React.createElement("div", { style: { fontSize: "10px", color: "#64748B" } },
+                                "Meta: ",
+                                repGoal(r),
+                                " ventas/mes")),
+                        React.createElement("span", { style: { marginLeft: "auto", color: "#94A3B8" } }, "\u203A")))))))) : (React.createElement(React.Fragment, null,
+                    React.createElement("button", { onClick: () => setSelRep(null), style: { background: "none", border: "none", color: "#2563EB", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", marginBottom: "14px", padding: 0 } }, "\u2190 Volver"),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" } },
+                        React.createElement("div", { style: { width: "38px", height: "38px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: "800", color: "#1D4ED8" } }, selRep.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A" } }, selRep),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#64748B" } },
+                                "Meta: ",
+                                repGoal(selRep),
+                                " ventas/mes"))),
+                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" } }, "Clave de acceso"),
+                    React.createElement("input", { type: "password", placeholder: "Ingresa tu clave", value: repPwd, autoFocus: true, onChange: e => { setRepPwd(e.target.value); setRepPwdErr(false); }, onKeyDown: e => { if (e.key === "Enter")
+                            doRepLogin(); }, style: { width: "100%", padding: "10px 12px", boxSizing: "border-box", border: `2px solid ${repPwdErr ? "#FECACA" : "#E2E8F0"}`, borderRadius: "8px", fontSize: "14px", outline: "none", fontFamily: "inherit", marginBottom: "8px", background: repPwdErr ? "#FEF2F2" : "#FFF" } }),
+                    repPwdErr && React.createElement("div", { style: { fontSize: "11px", color: "#DC2626", fontWeight: "600", marginBottom: "8px", textAlign: "center" } }, "Clave incorrecta"),
+                    React.createElement("button", { onClick: doRepLogin, style: { width: "100%", padding: "10px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "Entrar"))),
+                React.createElement("div", { style: { borderTop: "1px solid #F1F5F9", paddingTop: "14px", marginTop: "14px" } },
+                    React.createElement("button", { onClick: () => setView("manager"), style: { width: "100%", padding: "10px", background: "#F8FAFC", color: "#1D4ED8", border: "2px solid #BFDBFE", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "\uD83D\uDD12 Acceso Manager")))));
+    function doRepLogin() {
+        const pass = repPass(selRep);
+        if (!pass || repPwd === pass) {
+            setRepName(selRep);
+            setTab("hoy");
+            setDayOff(0);
+            setSemOff(0);
+            setSelRep(null);
+            setRepPwd("");
+            setRepPwdErr(false);
+            setView("rep");
+        }
+        else {
+            setRepPwdErr(true);
+            setRepPwd("");
+        }
+    }
+    // ── MANAGER GATE ──
+    if (view === "manager" && !mgUnlocked)
+        return (React.createElement("div", { style: { minHeight: "100vh", background: "#F8FAFC", fontFamily: "'Segoe UI',system-ui,sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" } },
+            React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83D\uDD12"),
+            React.createElement("div", { style: { fontSize: "18px", fontWeight: "700", color: "#0F172A", marginBottom: "4px" } }, "Acceso Manager"),
+            React.createElement("div", { style: { fontSize: "13px", color: "#64748B", marginBottom: "24px" } }, "Ingresa la clave para continuar"),
+            React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "22px", width: "100%", maxWidth: "300px", boxShadow: "0 2px 12px rgba(0,0,0,0.06)" } },
+                React.createElement("input", { type: "password", placeholder: "Clave de acceso", value: mgPass, autoFocus: true, onChange: e => { setMgPass(e.target.value); setMgPassErr(false); }, onKeyDown: e => { if (e.key === "Enter")
+                        doMgrLogin(); }, style: { width: "100%", padding: "10px 12px", boxSizing: "border-box", border: `2px solid ${mgPassErr ? "#FECACA" : "#E2E8F0"}`, borderRadius: "8px", fontSize: "14px", outline: "none", fontFamily: "inherit", marginBottom: "8px", background: mgPassErr ? "#FEF2F2" : "#FFF" } }),
+                mgPassErr && React.createElement("div", { style: { fontSize: "11px", color: "#DC2626", fontWeight: "600", marginBottom: "8px", textAlign: "center" } }, "Clave incorrecta"),
+                React.createElement("button", { onClick: doMgrLogin, style: { width: "100%", padding: "10px", background: "#1D4ED8", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", marginBottom: "8px" } }, "Entrar"),
+                React.createElement("button", { onClick: () => { setView("login"); setMgPass(""); setMgPassErr(false); }, style: { width: "100%", padding: "8px", background: "transparent", color: "#64748B", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" } }, "\u2190 Volver"))));
+    function doMgrLogin() {
+        if (mgPass === MANAGER_PASS) {
+            setMgUnlocked(true);
+            setMgPass("");
+            setMgPassErr(false);
+        }
+        else {
+            setMgPassErr(true);
+            setMgPass("");
+        }
+    }
+    // ── MANAGER DASHBOARD ──
+    if (view === "manager") {
+        const mgrGoal = cfg.mgrGoal || 85;
+        const teamVentas = reps.reduce((s, r) => s + monthTotal(r, "ventas"), 0);
+        const teamPct = Math.min(100, Math.round((teamVentas / mgrGoal) * 100));
+        const dE = elapsed, tD = totalMo;
+        const archived = cfg.archivedPipeline || [];
+        const pipeline = [];
+        reps.forEach(rep => {
+            const pfx = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
+            Object.entries(data[rep] || {}).filter(([k]) => k.startsWith(pfx)).forEach(([dk, dayData]) => {
+                const demoLog = dayData?.demos_log || [], cotLog = dayData?.cotizaciones_log || [], ventaLog = dayData?.ventas_log || [];
+                const ventaNames = new Set(ventaLog.map(e => e.name + "||" + e.phone));
+                [...new Set([...demoLog.map(e => e.name + "||" + e.phone), ...cotLog.map(e => e.name + "||" + e.phone)])].forEach(key => {
+                    if (!ventaNames.has(key) && !archived.find(a => a.key === key + "||" + rep)) {
+                        const [name, phone] = key.split("||");
+                        if (!pipeline.find(p => p.name === name && p.phone === phone && p.rep === rep))
+                            pipeline.push({ rep, name, phone, stage: cotLog.find(e => e.name === name) ? "📄 Cotización" : "🚗 Demo", date: dk, key: key + "||" + rep });
+                    }
+                });
+            });
+        });
+        return (React.createElement("div", { style: { minHeight: "100vh", background: "#F8FAFC", fontFamily: "'Segoe UI',system-ui,sans-serif" } },
+            showMgrGoal && React.createElement(GoalModal, { title: "\uD83C\uDFC6 Meta del Gerente (equipo)", value: mgrGoal, color: "#059669", bg: "#F0FDF4", border: "#BBF7D0", onSave: v => { saveCfg({ ...cfg, mgrGoal: v }); setShowMgrGoal(false); }, onClose: () => setShowMgrGoal(false) }),
+            editRepGoal && React.createElement(GoalModal, { title: `🎯 Meta de ${editRepGoal}`, value: repGoal(editRepGoal), onSave: v => saveRepGoal(editRepGoal, v), onClose: () => setEditRepGoal(null) }),
+            showAddRep && (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "22px", width: "100%", maxWidth: "340px", boxShadow: "0 8px 32px rgba(0,0,0,0.14)" } },
+                    React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A", marginBottom: "16px" } }, "\u2795 Nuevo Rep"),
+                    [{ label: "Nombre completo", ph: "Ej: Francisco Aquino", val: newName, set: setNewName, type: "text" }, { label: "Clave de acceso", ph: "Clave del rep", val: newPass, set: setNewPass, type: "password" }].map(f => (React.createElement("div", { key: f.label, style: { marginBottom: "12px" } },
+                        React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" } }, f.label),
+                        React.createElement("input", { placeholder: f.ph, type: f.type, value: f.val, onChange: e => f.set(e.target.value), style: { width: "100%", padding: "10px 12px", boxSizing: "border-box", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "14px", outline: "none", fontFamily: "inherit" } })))),
+                    React.createElement("div", { style: { marginBottom: "18px" } },
+                        React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" } }, "Meta ventas / mes"),
+                        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                            React.createElement("button", { onClick: () => setNewGoal(v => String(Math.max(1, (parseInt(v) || 1) - 1))), style: { width: "34px", height: "34px", borderRadius: "8px", border: "2px solid #E2E8F0", background: "#F8FAFC", fontSize: "18px", cursor: "pointer", fontFamily: "inherit", color: "#64748B" } }, "\u2212"),
+                            React.createElement("input", { type: "number", min: "1", value: newGoal, onChange: e => setNewGoal(e.target.value), style: { flex: 1, textAlign: "center", fontSize: "24px", fontWeight: "800", color: "#DC2626", border: "2px solid #FECACA", borderRadius: "8px", padding: "6px", outline: "none", fontFamily: "inherit", background: "#FEF2F2" } }),
+                            React.createElement("button", { onClick: () => setNewGoal(v => String((parseInt(v) || 1) + 1)), style: { width: "34px", height: "34px", borderRadius: "8px", border: "2px solid #E2E8F0", background: "#F8FAFC", fontSize: "18px", cursor: "pointer", fontFamily: "inherit", color: "#64748B" } }, "+"))),
+                    React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                        React.createElement("button", { onClick: () => { setShowAddRep(false); setNewName(""); setNewGoal("8"); setNewPass(""); }, style: { flex: 1, padding: "10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "13px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"),
+                        React.createElement("button", { disabled: !newName.trim() || !newPass.trim(), onClick: createRep, style: { flex: 2, padding: "10px", background: (newName.trim() && newPass.trim()) ? "#2563EB" : "#E2E8F0", color: (newName.trim() && newPass.trim()) ? "#FFF" : "#94A3B8", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "Crear Rep"))))),
+            delRep && (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #FECACA", borderRadius: "14px", padding: "22px", width: "100%", maxWidth: "300px", textAlign: "center", boxShadow: "0 8px 32px rgba(0,0,0,0.14)" } },
+                    React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83D\uDDD1\uFE0F"),
+                    React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A", marginBottom: "6px" } },
+                        "\u00BFEliminar a ",
+                        delRep,
+                        "?"),
+                    React.createElement("div", { style: { fontSize: "12px", color: "#64748B", marginBottom: "20px" } }, "Se borrar\u00E1n todos sus datos."),
+                    React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                        React.createElement("button", { onClick: () => setDelRep(null), style: { flex: 1, padding: "10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "13px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"),
+                        React.createElement("button", { onClick: () => removeRep(delRep), style: { flex: 1, padding: "10px", background: "#DC2626", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", color: "#FFF", cursor: "pointer", fontFamily: "inherit" } }, "Eliminar"))))),
+            mgCallModal && (() => {
+                const calls = allMonthCalls(mgCallModal);
+                return (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+                    React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "20px", width: "100%", maxWidth: "420px", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" } },
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                            React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A" } },
+                                "\uD83D\uDCDE Llamadas de ",
+                                mgCallModal),
+                            React.createElement("button", { onClick: () => setMgCallModal(null), style: { background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748B" } }, "\u2715")),
+                        React.createElement("div", { style: { fontSize: "12px", color: "#64748B", marginBottom: "14px" } },
+                            calls.length,
+                            " llamada(s) este mes"),
+                        calls.length === 0 ? React.createElement("div", { style: { textAlign: "center", padding: "30px", color: "#94A3B8" } },
+                            React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83D\uDCF5"),
+                            React.createElement("div", null, "No hay llamadas registradas"))
+                            : calls.map((e, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "10px", padding: "9px 12px", background: "#F8FAFC", border: "1.5px solid #E2E8F0", borderRadius: "8px", marginBottom: "6px" } },
+                                React.createElement("div", { style: { width: "28px", height: "28px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: "800", color: "#1D4ED8", flexShrink: 0 } }, i + 1),
+                                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                                    React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, e.name),
+                                    React.createElement("div", { style: { fontSize: "11px", color: "#2563EB", fontWeight: "600" } }, e.phone)),
+                                React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } },
+                                    React.createElement("div", { style: { fontSize: "10px", color: "#64748B" } }, e.date),
+                                    React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8" } }, e.time))))),
+                        React.createElement("button", { onClick: () => setMgCallModal(null), style: { width: "100%", marginTop: "12px", padding: "10px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "Cerrar"))));
+            })(),
+            React.createElement("div", { style: { background: "#FFF", borderBottom: "2px solid #E2E8F0", padding: "14px 18px", position: "sticky", top: 0, zIndex: 10, boxShadow: "0 1px 8px rgba(0,0,0,0.06)" } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: "10px", letterSpacing: "3px", color: "#94A3B8", textTransform: "uppercase" } }, "Dashboard"),
+                        React.createElement("div", { style: { fontSize: "17px", fontWeight: "700", color: "#0F172A" } }, "\uD83D\uDCCA Vista Manager")),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                        saving && React.createElement("span", { style: { fontSize: "10px", color: "#2563EB" } }, "\u27F3"),
+                        React.createElement("div", { style: { background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "8px", padding: "5px 10px", textAlign: "center" } },
+                            React.createElement("div", { style: { fontSize: "9px", color: "#1D4ED8", fontWeight: "700" } }, "MES"),
+                            React.createElement("div", { style: { fontSize: "15px", fontWeight: "800", color: "#1D4ED8" } },
+                                Math.round((dE / tD) * 100),
+                                "%")),
+                        React.createElement("button", { onClick: () => setShowAddRep(true), style: { padding: "5px 12px", background: "#2563EB", border: "none", borderRadius: "8px", fontSize: "11px", fontWeight: "700", color: "#FFF", cursor: "pointer", fontFamily: "inherit" } }, "+ Rep"),
+                        React.createElement("button", { onClick: () => window.print(), style: { padding: "5px 10px", background: "#F0FDF4", border: "2px solid #BBF7D0", borderRadius: "8px", fontSize: "11px", fontWeight: "600", color: "#059669", cursor: "pointer", fontFamily: "inherit" } }, "\uD83D\uDDA8\uFE0F"),
+                        React.createElement("button", { onClick: () => { setView("login"); setMgUnlocked(false); }, style: { padding: "5px 10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "11px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "\u2190 Salir"))),
+                React.createElement("div", { style: { display: "flex", gap: "5px", overflowX: "auto", paddingBottom: "2px" } }, [["resumen", "📊 Resumen"], ["hoy", "⚡ Hoy"], ["ranking", "🏆 Ranking"], ["conversion", "🔄 Conversión"], ["pipeline", "🔥 Pipeline"], ["alertas", "🚨 Alertas"]].map(([id, label]) => (React.createElement("button", { key: id, onClick: () => setMgTab(id), style: { padding: "5px 12px", fontSize: "11px", fontWeight: "700", border: "2px solid", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, borderRadius: "6px", cursor: "pointer", borderColor: mgTab === id ? "#2563EB" : "#E2E8F0", background: mgTab === id ? "#2563EB" : "#FFF", color: mgTab === id ? "#FFF" : "#64748B" } }, label))))),
+            React.createElement("div", { style: { padding: "14px", maxWidth: "700px", margin: "0 auto" } },
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #059669", borderRadius: "12px", padding: "12px 16px", marginBottom: "14px", boxShadow: "0 2px 8px rgba(5,150,105,0.08)" } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                        React.createElement("div", { style: { fontSize: "10px", color: "#059669", fontWeight: "700", letterSpacing: "2px", textTransform: "uppercase" } },
+                            "\uD83C\uDFC6 Meta Equipo \u00B7 ",
+                            t.toLocaleDateString("es-MX", { month: "long", year: "numeric" })),
+                        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                            React.createElement(PaceBadge, { status: paceOf(teamVentas, mgrGoal, dE, tD) }),
+                            React.createElement("button", { onClick: () => setShowMgrGoal(true), style: { background: "#F0FDF4", border: "2px solid #BBF7D0", borderRadius: "8px", padding: "4px 10px", cursor: "pointer", fontFamily: "inherit", fontSize: "12px", fontWeight: "700", color: "#059669" } },
+                                "Meta: ",
+                                mgrGoal,
+                                " \u270F\uFE0F"))),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                        React.createElement("div", { style: { flex: 1 } },
+                            React.createElement(Bar, { actual: teamVentas, goal: mgrGoal, color: "#059669", h: 10 })),
+                        React.createElement("div", { style: { fontSize: "14px", fontWeight: "800", color: teamPct >= 100 ? "#10B981" : "#059669", minWidth: "80px", textAlign: "right" } },
+                            teamVentas,
+                            " / ",
+                            mgrGoal,
+                            " \u00B7 ",
+                            teamPct,
+                            "%"))),
+                reps.length === 0 && React.createElement("div", { style: { textAlign: "center", padding: "60px 20px", color: "#94A3B8" } },
+                    React.createElement("div", { style: { fontSize: "40px", marginBottom: "12px" } }, "\uD83D\uDC64"),
+                    React.createElement("div", { style: { fontSize: "14px", fontWeight: "600" } }, "A\u00FAn no hay representantes")),
+                mgTab === "resumen" && reps.length > 0 && reps.map(rep => {
+                    const rG = repGoal(rep), rMo = monthly(rep), ventas = monthTotal(rep, "ventas"), llamadas = monthTotal(rep, "llamadas");
+                    const ini = rep.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+                    return (React.createElement("div", { key: rep, style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", marginBottom: "10px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                        React.createElement("div", { style: { background: "#F8FAFC", padding: "10px 14px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                                React.createElement("div", { style: { width: "34px", height: "34px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: "800", color: "#1D4ED8" } }, ini),
+                                React.createElement("div", null,
+                                    React.createElement("div", { style: { fontSize: "14px", fontWeight: "700", color: "#0F172A" } }, rep),
+                                    React.createElement("div", { style: { fontSize: "11px", color: "#64748B" } },
+                                        ventas,
+                                        "/",
+                                        rG,
+                                        " ventas \u00B7 ",
+                                        llamadas,
+                                        " llamadas"))),
+                            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "5px" } },
+                                React.createElement(PaceBadge, { status: paceOf(ventas, rG, dE, tD) }),
+                                React.createElement("button", { onClick: () => setEditRepGoal(rep), style: { background: "#FEF2F2", border: "1.5px solid #FECACA", borderRadius: "6px", padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px", fontWeight: "700", color: "#DC2626" } },
+                                    rG,
+                                    " \u270F\uFE0F"),
+                                React.createElement("button", { onClick: () => { setRepName(rep); setTab("hoy"); setDayOff(0); setView("rep"); }, style: { background: "#F0FDF4", border: "1.5px solid #BBF7D0", borderRadius: "6px", padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px", fontWeight: "700", color: "#059669" } }, "\u270F\uFE0F Editar"),
+                                React.createElement("button", { onClick: () => setDelRep(rep), style: { background: "#FFF1F2", border: "1.5px solid #FECACA", borderRadius: "6px", padding: "3px 7px", cursor: "pointer", fontFamily: "inherit", fontSize: "13px", lineHeight: 1 } }, "\uD83D\uDDD1\uFE0F"))),
+                        React.createElement("div", { style: { padding: "10px 14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" } }, METRICS.map(m => {
+                            const val = monthTotal(rep, m), goal = rMo[m], p = Math.min(100, Math.round((val / goal) * 100)), st = paceOf(val, goal, dE, tD);
+                            return (React.createElement("div", { key: m, onClick: () => { if (m === "llamadas" && val > 0)
+                                    setMgCallModal(rep); }, style: { background: "#F8FAFC", border: `1.5px solid ${m === "llamadas" && val > 0 ? "#BFDBFE" : "#E2E8F0"}`, borderRadius: "8px", padding: "7px 9px", cursor: m === "llamadas" && val > 0 ? "pointer" : "default" } },
+                                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" } },
+                                    React.createElement("span", { style: { fontSize: "10px", color: "#334155", fontWeight: "600" } },
+                                        ICONS[m],
+                                        " ",
+                                        LABELS[m]),
+                                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } },
+                                        m === "llamadas" && val > 0 && React.createElement("span", { style: { fontSize: "9px", color: "#2563EB", fontWeight: "700" } }, "Ver \u2192"),
+                                        React.createElement(PaceBadge, { status: st }))),
+                                React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: "3px", marginBottom: "4px" } },
+                                    React.createElement("span", { style: { fontSize: "16px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[m] } }, val),
+                                    React.createElement("span", { style: { fontSize: "10px", color: "#64748B" } },
+                                        "/ ",
+                                        goal)),
+                                React.createElement(Bar, { actual: val, goal: goal, color: COLORS[m] }),
+                                React.createElement("div", { style: { textAlign: "right", fontSize: "10px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[m], marginTop: "3px" } },
+                                    p,
+                                    "%")));
+                        }))));
+                }),
+                mgTab === "hoy" && reps.length > 0 && (React.createElement("div", null,
+                    React.createElement("div", { style: { fontSize: "12px", color: "#64748B", marginBottom: "12px", fontWeight: "600" } },
+                        "\u26A1 Actividad de hoy \u2014 ",
+                        t.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })),
+                    [...reps].sort((a, b) => { const s = (r) => METRICS.reduce((s, m) => (data[r]?.[tk]?.[m] || 0) + s, 0); return s(b) - s(a); }).map(rep => {
+                        const ini = rep.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+                        const td = data[rep]?.[tk] || {}, total = METRICS.reduce((s, m) => s + (td[m] || 0), 0);
+                        return (React.createElement("div", { key: rep, style: { background: "#FFF", border: `2px solid ${total > 0 ? "#BFDBFE" : "#E2E8F0"}`, borderRadius: "12px", marginBottom: "8px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { background: total > 0 ? "#EFF6FF" : "#F8FAFC", padding: "9px 14px", borderBottom: `1px solid ${total > 0 ? "#BFDBFE" : "#E2E8F0"}`, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                                    React.createElement("div", { style: { width: "30px", height: "30px", borderRadius: "50%", background: total > 0 ? "#2563EB" : "#E2E8F0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "800", color: total > 0 ? "#FFF" : "#94A3B8" } }, ini),
+                                    React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: total > 0 ? "#0F172A" : "#94A3B8" } }, rep)),
+                                total > 0 ? React.createElement("span", { style: { fontSize: "11px", fontWeight: "700", color: "#1D4ED8", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "20px", padding: "2px 8px" } },
+                                    total,
+                                    " actividades") : React.createElement("span", { style: { fontSize: "11px", color: "#CBD5E1", fontWeight: "600" } }, "Sin actividad hoy")),
+                            total > 0 && (React.createElement("div", { style: { padding: "8px 14px", display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "6px" } }, METRICS.map(m => {
+                                const v = td[m] || 0, dGoal = buildDaily(repGoal(rep), remainingDays(repDaysOff(rep)))[m], p = Math.min(100, Math.round((v / dGoal) * 100));
+                                return React.createElement("div", { key: m, style: { textAlign: "center", padding: "5px 4px", background: v > 0 ? `${COLORS[m]}10` : "#F8FAFC", borderRadius: "6px", border: `1px solid ${v > 0 ? COLORS[m] + "33" : "#F1F5F9"}` } },
+                                    React.createElement("div", { style: { fontSize: "12px", marginBottom: "2px" } }, ICONS[m]),
+                                    React.createElement("div", { style: { fontSize: "14px", fontWeight: "800", color: v > 0 ? COLORS[m] : "#CBD5E1" } }, v),
+                                    React.createElement("div", { style: { fontSize: "8px", color: "#94A3B8" } },
+                                        p,
+                                        "%"));
+                            })))));
+                    }))),
+                mgTab === "ranking" && reps.length > 0 && (() => {
+                    const sorted = [...reps].map(r => ({ rep: r, val: monthTotal(r, rankMetric), goal: monthly(r)[rankMetric] })).sort((a, b) => b.val - a.val);
+                    const mx = sorted[0]?.val || 1;
+                    return React.createElement("div", null,
+                        React.createElement("div", { style: { display: "flex", gap: "6px", marginBottom: "14px", flexWrap: "wrap" } }, METRICS.map(m => React.createElement("button", { key: m, onClick: () => setRankMetric(m), style: { padding: "4px 10px", fontSize: "10px", fontWeight: "700", border: "1.5px solid", borderRadius: "6px", cursor: "pointer", fontFamily: "inherit", borderColor: rankMetric === m ? COLORS[m] : "#E2E8F0", background: rankMetric === m ? COLORS[m] : "#FFF", color: rankMetric === m ? "#FFF" : "#64748B" } },
+                            ICONS[m],
+                            " ",
+                            LABELS[m]))),
+                        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" } },
+                                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } },
+                                    "\uD83C\uDFC6 Ranking \u2014 ",
+                                    LABELS[rankMetric])),
+                            sorted.map(({ rep, val, goal }, idx) => {
+                                const ini = rep.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase(), pct = Math.min(100, Math.round((val / goal) * 100));
+                                return React.createElement("div", { key: rep, style: { padding: "12px 16px", borderBottom: idx < sorted.length - 1 ? "1px solid #F1F5F9" : "none", display: "flex", alignItems: "center", gap: "12px" } },
+                                    React.createElement("div", { style: { fontSize: "20px", width: "28px", textAlign: "center" } }, ["🥇", "🥈", "🥉"][idx] || `#${idx + 1}`),
+                                    React.createElement("div", { style: { width: "32px", height: "32px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "800", color: "#1D4ED8", flexShrink: 0 } }, ini),
+                                    React.createElement("div", { style: { flex: 1 } },
+                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "5px" } },
+                                            React.createElement("span", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A" } }, rep),
+                                            React.createElement("span", { style: { fontSize: "13px", fontWeight: "800", color: pct >= 100 ? "#10B981" : COLORS[rankMetric] } },
+                                                val,
+                                                React.createElement("span", { style: { fontSize: "10px", color: "#94A3B8", fontWeight: "400" } },
+                                                    " / ",
+                                                    goal))),
+                                        React.createElement("div", { style: { background: "#F1F5F9", borderRadius: "4px", height: "8px", overflow: "hidden" } },
+                                            React.createElement("div", { style: { width: `${Math.round((val / mx) * 100)}%`, height: "100%", background: idx === 0 ? "#F59E0B" : COLORS[rankMetric], borderRadius: "4px" } }))),
+                                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: pct >= 100 ? "#10B981" : "#64748B", minWidth: "36px", textAlign: "right" } },
+                                        pct,
+                                        "%"));
+                            })));
+                })(),
+                mgTab === "conversion" && reps.length > 0 && (React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" } },
+                        React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } }, "\uD83D\uDD04 Tasa de Conversi\u00F3n"),
+                        React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8", marginTop: "2px" } }, "Llamadas \u2192 Citas \u2192 Demos \u2192 Ventas")),
+                    reps.map((rep, idx) => {
+                        const ll = monthTotal(rep, "llamadas") || 0, ci = monthTotal(rep, "citas") || 0, de = monthTotal(rep, "demos") || 0, ve = monthTotal(rep, "ventas") || 0;
+                        const steps = [{ l: "📞", v: ll, color: "#2563EB" }, { l: "📅", v: ci, pct: ll > 0 ? Math.round((ci / ll) * 100) : 0, color: "#D97706" }, { l: "🚗", v: de, pct: ci > 0 ? Math.round((de / ci) * 100) : 0, color: "#0891B2" }, { l: "✅", v: ve, pct: de > 0 ? Math.round((ve / de) * 100) : 0, color: "#DC2626" }];
+                        const ini = rep.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+                        return React.createElement("div", { key: rep, style: { padding: "12px 16px", borderBottom: idx < reps.length - 1 ? "1px solid #F1F5F9" : "none" } },
+                            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" } },
+                                React.createElement("div", { style: { width: "26px", height: "26px", borderRadius: "50%", background: "#EFF6FF", border: "2px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "9px", fontWeight: "800", color: "#1D4ED8" } }, ini),
+                                React.createElement("span", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A" } }, rep)),
+                            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "6px" } }, steps.map((s, i) => React.createElement("div", { key: i, style: { textAlign: "center", padding: "7px 4px", background: `${s.color}10`, borderRadius: "7px", border: `1px solid ${s.color}33` } },
+                                React.createElement("div", { style: { fontSize: "14px", marginBottom: "2px" } }, s.l),
+                                React.createElement("div", { style: { fontSize: "18px", fontWeight: "800", color: s.v > 0 ? s.color : "#CBD5E1" } }, s.v),
+                                i > 0 && React.createElement("div", { style: { fontSize: "9px", color: s.pct >= 50 ? "#059669" : "#DC2626", fontWeight: "700" } },
+                                    s.pct,
+                                    "% conv.")))));
+                    }))),
+                mgTab === "pipeline" && reps.length > 0 && (React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } }, "\uD83D\uDD25 Clientes en Pipeline"),
+                            React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8", marginTop: "2px" } }, "Demo o Cotizaci\u00F3n pendiente \u00B7 \uD83D\uDDD1\uFE0F para archivar")),
+                        React.createElement("span", { style: { fontSize: "18px", fontWeight: "800", color: "#DC2626" } }, pipeline.length)),
+                    pipeline.length === 0 ? (React.createElement("div", { style: { padding: "30px", textAlign: "center", color: "#94A3B8" } },
+                        React.createElement("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "\uD83C\uDFAF"),
+                        React.createElement("div", { style: { fontSize: "13px" } }, "No hay clientes pendientes en pipeline"))) : pipeline.map((c, i) => {
+                        const daysIn = Math.floor((t - new Date(c.date + "T12:00:00")) / (1000 * 60 * 60 * 24));
+                        const hot = daysIn >= 15;
+                        return (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "10px", padding: "10px 16px", borderBottom: i < pipeline.length - 1 ? "1px solid #F1F5F9" : "none", background: hot ? "#FFF7ED" : "transparent" } },
+                            React.createElement("div", { style: { fontSize: "18px" } }, c.stage.split(" ")[0]),
+                            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                                React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, c.name),
+                                React.createElement("div", { style: { fontSize: "10px", color: "#64748B" } },
+                                    c.phone,
+                                    " \u00B7 ",
+                                    c.rep)),
+                            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 } },
+                                React.createElement("div", { style: { textAlign: "right" } },
+                                    React.createElement("div", { style: { fontSize: "10px", fontWeight: "700", color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: "4px", padding: "2px 6px" } }, c.stage.split(" ").slice(1).join(" ")),
+                                    React.createElement("div", { style: { fontSize: "9px", marginTop: "2px", fontWeight: hot ? "700" : "400", color: hot ? "#DC2626" : "#94A3B8" } },
+                                        hot ? "🔥 " : "",
+                                        daysIn,
+                                        " d\u00EDa",
+                                        daysIn !== 1 ? "s" : "",
+                                        " en pipeline")),
+                                React.createElement("button", { onClick: () => archivePipeline(c.key), style: { padding: "5px 8px", background: "#FFF1F2", border: "1.5px solid #FECACA", borderRadius: "6px", cursor: "pointer", fontFamily: "inherit", fontSize: "13px", lineHeight: 1 }, title: "Archivar" }, "\uD83D\uDDD1\uFE0F"))));
+                    }),
+                    archived.length > 0 && (React.createElement("div", { style: { padding: "10px 16px", borderTop: "2px solid #F1F5F9", background: "#F8FAFC" } },
+                        React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8", fontWeight: "600" } },
+                            archived.length,
+                            " cliente(s) archivado(s) \u00B7 ",
+                            React.createElement("button", { onClick: () => saveCfg({ ...cfg, archivedPipeline: [] }), style: { background: "none", border: "none", color: "#2563EB", fontSize: "10px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", padding: 0 } }, "Limpiar todos")))))),
+                mgTab === "alertas" && reps.length > 0 && (() => {
+                    const atrasados = reps.filter(r => paceOf(monthTotal(r, "ventas"), repGoal(r), dE, tD) === "behind");
+                    const sinAct = reps.filter(r => METRICS.every(m => !(data[r]?.[tk]?.[m])));
+                    const topConv = reps.map(r => ({ rep: r, rate: Math.round((monthTotal(r, "ventas") / Math.max(1, monthTotal(r, "llamadas"))) * 100) })).sort((a, b) => b.rate - a.rate);
+                    const ayer = dateKey(offsetDay(-1)), antier = dateKey(offsetDay(-2));
+                    const sinLlamadas2 = reps.filter(r => !(data[r]?.[tk]?.llamadas) && !(data[r]?.[ayer]?.llamadas) && !(data[r]?.[antier]?.llamadas));
+                    return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+                        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { padding: "10px 16px", background: "#FEF2F2", borderBottom: "1px solid #FECACA" } },
+                                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#DC2626", fontWeight: "700", textTransform: "uppercase" } }, "\uD83D\uDEA8 Reps Atrasados en Ventas")),
+                            atrasados.length === 0 ? React.createElement("div", { style: { padding: "20px", textAlign: "center", color: "#059669" } },
+                                React.createElement("div", { style: { fontSize: "24px", marginBottom: "6px" } }, "\u2705"),
+                                React.createElement("div", { style: { fontSize: "13px", fontWeight: "600" } }, "\u00A1Todos van en ritmo!"))
+                                : atrasados.map((rep, i) => {
+                                    const ve = monthTotal(rep, "ventas"), rG = repGoal(rep), pct = Math.min(100, Math.round((ve / rG) * 100)), exp = Math.round((dE / tD) * 100);
+                                    return React.createElement("div", { key: rep, style: { padding: "12px 16px", borderBottom: i < atrasados.length - 1 ? "1px solid #F1F5F9" : "none", display: "flex", alignItems: "center", gap: "10px" } },
+                                        React.createElement("div", { style: { fontSize: "20px" } }, "\u26A0\uFE0F"),
+                                        React.createElement("div", { style: { flex: 1 } },
+                                            React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A" } }, rep),
+                                            React.createElement("div", { style: { fontSize: "11px", color: "#DC2626", marginTop: "2px" } },
+                                                ve,
+                                                " ventas (",
+                                                pct,
+                                                "%) \u2014 esperado ",
+                                                exp,
+                                                "% del mes"),
+                                            React.createElement(Bar, { actual: ve, goal: rG, color: "#DC2626", h: 4 })),
+                                        React.createElement("button", { onClick: () => { setRepName(rep); setTab("hoy"); setDayOff(0); setView("rep"); }, style: { padding: "4px 10px", background: "#FEF2F2", border: "1.5px solid #FECACA", borderRadius: "6px", fontSize: "10px", fontWeight: "700", color: "#DC2626", cursor: "pointer", fontFamily: "inherit" } }, "Ver \u2192"));
+                                })),
+                        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { padding: "10px 16px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A" } },
+                                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#D97706", fontWeight: "700", textTransform: "uppercase" } }, "\uD83D\uDE34 Sin Actividad Hoy")),
+                            sinAct.length === 0 ? React.createElement("div", { style: { padding: "20px", textAlign: "center", color: "#059669" } },
+                                React.createElement("div", { style: { fontSize: "24px", marginBottom: "6px" } }, "\uD83D\uDCAA"),
+                                React.createElement("div", { style: { fontSize: "13px", fontWeight: "600" } }, "\u00A1Todos registraron actividad hoy!"))
+                                : sinAct.map((rep, i) => React.createElement("div", { key: rep, style: { padding: "11px 16px", borderBottom: i < sinAct.length - 1 ? "1px solid #F1F5F9" : "none", display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                                    React.createElement("div", { style: { fontSize: "13px", fontWeight: "600", color: "#92400E" } },
+                                        "\uD83D\uDE34 ",
+                                        rep),
+                                    React.createElement("button", { onClick: () => { setRepName(rep); setTab("hoy"); setDayOff(0); setView("rep"); }, style: { padding: "4px 10px", background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: "6px", fontSize: "10px", fontWeight: "700", color: "#D97706", cursor: "pointer", fontFamily: "inherit" } }, "Ver \u2192")))),
+                        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { padding: "10px 16px", background: "#F5F3FF", borderBottom: "1px solid #DDD6FE" } },
+                                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#7C3AED", fontWeight: "700", textTransform: "uppercase" } }, "\uD83D\uDCF5 Sin Llamadas \u2014 \u00DAltimos 2 D\u00EDas"),
+                                React.createElement("div", { style: { fontSize: "10px", color: "#A78BFA", marginTop: "2px" } }, "No han registrado ninguna llamada hoy ni ayer")),
+                            sinLlamadas2.length === 0 ? React.createElement("div", { style: { padding: "20px", textAlign: "center", color: "#059669" } },
+                                React.createElement("div", { style: { fontSize: "24px", marginBottom: "6px" } }, "\uD83D\uDCDE"),
+                                React.createElement("div", { style: { fontSize: "13px", fontWeight: "600" } }, "\u00A1Todos han llamado recientemente!"))
+                                : sinLlamadas2.map((rep, i) => {
+                                    const ultima = Object.entries(data[rep] || {}).filter(([, d]) => (d.llamadas || 0) > 0).sort((a, b) => b[0].localeCompare(a[0]))[0];
+                                    return React.createElement("div", { key: rep, style: { padding: "11px 16px", borderBottom: i < sinLlamadas2.length - 1 ? "1px solid #F1F5F9" : "none", display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                                        React.createElement("div", null,
+                                            React.createElement("div", { style: { fontSize: "13px", fontWeight: "600", color: "#5B21B6" } },
+                                                "\uD83D\uDCF5 ",
+                                                rep),
+                                            React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8", marginTop: "2px" } }, ultima ? `Última llamada: ${ultima[0]}` : "Sin llamadas este mes")),
+                                        React.createElement("button", { onClick: () => { setRepName(rep); setTab("hoy"); setDayOff(0); setView("rep"); }, style: { padding: "4px 10px", background: "#F5F3FF", border: "1.5px solid #DDD6FE", borderRadius: "6px", fontSize: "10px", fontWeight: "700", color: "#7C3AED", cursor: "pointer", fontFamily: "inherit" } }, "Ver \u2192"));
+                                })),
+                        React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                            React.createElement("div", { style: { padding: "10px 16px", background: "#F0FDF4", borderBottom: "1px solid #BBF7D0" } },
+                                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#059669", fontWeight: "700", textTransform: "uppercase" } }, "\uD83C\uDF1F Mejor Tasa Llamada \u2192 Venta")),
+                            topConv.map((item, i) => React.createElement("div", { key: item.rep, style: { padding: "10px 16px", borderBottom: i < topConv.length - 1 ? "1px solid #F1F5F9" : "none", display: "flex", alignItems: "center", gap: "10px" } },
+                                React.createElement("span", { style: { fontSize: "18px" } }, ["🥇", "🥈", "🥉"][i] || `#${i + 1}`),
+                                React.createElement("span", { style: { fontSize: "13px", fontWeight: "700", color: "#0F172A", flex: 1 } }, item.rep),
+                                React.createElement("span", { style: { fontSize: "16px", fontWeight: "800", color: item.rate > 0 ? "#059669" : "#CBD5E1" } },
+                                    item.rate,
+                                    "%")))));
+                })())));
+    }
+    // ── REP VIEW ──
+    const rG = repGoal(repName), rMo = monthly(repName), rDa = daily(repName), rOff = repDaysOff(repName);
+    const canEdit = (dk) => !rOff.includes(dk) && dk <= tk;
+    const curDay = offsetDay(dayOff), curKey = dateKey(curDay), isToday = curKey === tk;
+    const semDays = weekDays(semOff);
+    return (React.createElement("div", { style: { minHeight: "100vh", background: "#F8FAFC", fontFamily: "'Segoe UI',system-ui,sans-serif", color: "#1E293B" } },
+        showCallModal && (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+            React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "20px", width: "100%", maxWidth: "380px", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" } },
+                    React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A" } }, "\uD83D\uDCDE Registrar Llamada"),
+                    React.createElement("button", { onClick: () => { setShowCallModal(null); setCallName(""); setCallPhone(""); setCallErr(""); }, style: { background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748B" } }, "\u2715")),
+                [{ label: "Nombre del cliente", val: callName, set: setCallName, type: "text", ph: "Ej: Juan García" }, { label: "Teléfono", val: callPhone, set: setCallPhone, type: "tel", ph: "787-555-1234" }].map(f => (React.createElement("div", { key: f.label, style: { marginBottom: "12px" } },
+                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" } },
+                        f.label,
+                        " *"),
+                    React.createElement("input", { placeholder: f.ph, type: f.type, value: f.val, onChange: e => { f.set(e.target.value); setCallErr(""); }, style: { width: "100%", padding: "10px 12px", boxSizing: "border-box", border: `2px solid ${callErr ? "#FECACA" : "#E2E8F0"}`, borderRadius: "8px", fontSize: "14px", outline: "none", fontFamily: "inherit", background: callErr ? "#FEF2F2" : "#FFF" } })))),
+                callErr && React.createElement("div", { style: { fontSize: "11px", color: "#DC2626", fontWeight: "600", marginBottom: "10px", padding: "8px", background: "#FEF2F2", borderRadius: "6px" } },
+                    "\u26A0\uFE0F ",
+                    callErr),
+                getCallLog(repName, showCallModal).length > 0 && (React.createElement("div", { style: { marginBottom: "14px" } },
+                    React.createElement("div", { style: { fontSize: "11px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" } },
+                        "Registradas (",
+                        getCallLog(repName, showCallModal).length,
+                        ")"),
+                    React.createElement("div", { style: { maxHeight: "130px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "5px" } }, getCallLog(repName, showCallModal).map((e, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "8px", padding: "7px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: "7px" } },
+                        React.createElement("span", { style: { fontSize: "12px" } }, "\u2705"),
+                        React.createElement("div", { style: { flex: 1 } },
+                            React.createElement("div", { style: { fontSize: "12px", fontWeight: "600", color: "#065F46" } }, e.name),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#059669" } },
+                                e.phone,
+                                " \u00B7 ",
+                                e.time)),
+                        React.createElement("button", { onClick: () => removeCall(repName, showCallModal, i), style: { background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: "5px", padding: "2px 6px", cursor: "pointer", fontFamily: "inherit", fontSize: "12px", color: "#DC2626", flexShrink: 0 } }, "\uD83D\uDDD1\uFE0F"))))))),
+                React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                    React.createElement("button", { onClick: () => { setShowCallModal(null); setCallName(""); setCallPhone(""); setCallErr(""); }, style: { flex: 1, padding: "10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "13px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"),
+                    React.createElement("button", { onClick: () => {
+                            if (!callName.trim() || !callPhone.trim()) {
+                                setCallErr("Nombre y teléfono requeridos");
+                                return;
+                            }
+                            addCall(repName, showCallModal, { name: callName.trim(), phone: callPhone.trim(), time: new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) });
+                            setCallName("");
+                            setCallPhone("");
+                            setCallErr("");
+                        }, style: { flex: 2, padding: "10px", background: "#2563EB", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", color: "#FFF", cursor: "pointer", fontFamily: "inherit" } }, "\u2713 Confirmar"))))),
+        clientModal && (() => {
+            const { metric, dateKey: dk } = clientModal;
+            const allCalls = allMonthCalls(repName);
+            const done = getActLog(repName, dk, metric).map(e => e.name + "||" + e.phone);
+            return (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "20px", width: "100%", maxWidth: "400px", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A" } },
+                                ICONS[metric],
+                                " Registrar ",
+                                LABELS[metric]),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#64748B", marginTop: "2px" } }, "Selecciona el cliente de tu lista de llamadas")),
+                        React.createElement("button", { onClick: () => setClientModal(null), style: { background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748B" } }, "\u2715")),
+                    getActLog(repName, dk, metric).length > 0 && (React.createElement("div", { style: { marginBottom: "12px" } },
+                        React.createElement("div", { style: { fontSize: "10px", fontWeight: "700", color: "#059669", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" } },
+                            "Ya registrados (",
+                            getActLog(repName, dk, metric).length,
+                            ")"),
+                        getActLog(repName, dk, metric).map((e, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "8px", padding: "7px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: "7px", marginBottom: "4px" } },
+                            React.createElement("span", { style: { fontSize: "13px" } }, "\u2705"),
+                            React.createElement("div", { style: { flex: 1 } },
+                                React.createElement("div", { style: { fontSize: "12px", fontWeight: "600", color: "#065F46" } }, e.name),
+                                React.createElement("div", { style: { fontSize: "10px", color: "#059669" } }, e.phone)),
+                            React.createElement("span", { style: { fontSize: "10px", color: "#94A3B8" } }, e.time),
+                            React.createElement("button", { onClick: () => removeActivity(repName, dk, metric, i), style: { background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: "5px", padding: "2px 6px", cursor: "pointer", fontFamily: "inherit", fontSize: "12px", color: "#DC2626", flexShrink: 0 } }, "\uD83D\uDDD1\uFE0F")))))),
+                    React.createElement("div", { style: { fontSize: "10px", fontWeight: "700", color: "#64748B", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" } },
+                        "Llamadas del mes (",
+                        allCalls.length,
+                        ")"),
+                    allCalls.length === 0 ? (React.createElement("div", { style: { textAlign: "center", padding: "24px", color: "#94A3B8", background: "#F8FAFC", borderRadius: "8px" } },
+                        React.createElement("div", { style: { fontSize: "24px", marginBottom: "6px" } }, "\uD83D\uDCF5"),
+                        React.createElement("div", { style: { fontSize: "12px" } }, "Registra llamadas primero para poder vincularlas."))) : (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "5px" } }, allCalls.map((e, i) => {
+                        const key = e.name + "||" + e.phone, isDone = done.includes(key);
+                        return (React.createElement("button", { key: i, disabled: isDone, onClick: () => addActivityForClient(repName, dk, metric, e), style: { display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", background: isDone ? "#F0FDF4" : "#F8FAFC", border: `1.5px solid ${isDone ? "#BBF7D0" : COLORS[metric] + "55"}`, borderRadius: "8px", cursor: isDone ? "default" : "pointer", fontFamily: "inherit", textAlign: "left", width: "100%", opacity: isDone ? 0.75 : 1 } },
+                            React.createElement("div", { style: { width: "30px", height: "30px", borderRadius: "50%", flexShrink: 0, background: isDone ? "#ECFDF5" : `${COLORS[metric]}15`, border: `2px solid ${isDone ? "#6EE7B7" : COLORS[metric] + "44"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "800", color: isDone ? "#059669" : COLORS[metric] } }, isDone ? "✓" : (i + 1)),
+                            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                                React.createElement("div", { style: { fontSize: "13px", fontWeight: "600", color: isDone ? "#065F46" : "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, e.name),
+                                React.createElement("div", { style: { fontSize: "11px", color: isDone ? "#059669" : "#64748B" } }, e.phone)),
+                            React.createElement("div", { style: { flexShrink: 0, textAlign: "right" } },
+                                React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8" } }, e.date),
+                                React.createElement("span", { style: { fontSize: "10px", fontWeight: "700", color: isDone ? "#059669" : COLORS[metric] } }, isDone ? "✓ Listo" : "+ Agregar"))));
+                    }))),
+                    React.createElement("button", { onClick: () => setClientModal(null), style: { width: "100%", marginTop: "14px", padding: "10px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "Cerrar"))));
+        })(),
+        showDaysOff && (() => {
+            const mo = t.getMonth(), yr = t.getFullYear(), dInMo = monthDays(yr, mo), fdow = new Date(yr, mo, 1).getDay();
+            return (React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" } },
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "14px", padding: "20px", width: "100%", maxWidth: "360px", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                        React.createElement("div", { style: { fontSize: "15px", fontWeight: "700", color: "#0F172A" } }, "\uD83C\uDFD6\uFE0F D\u00EDas Libres"),
+                        React.createElement("button", { onClick: () => setShowDaysOff(false), style: { background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748B" } }, "\u2715")),
+                    React.createElement("div", { style: { fontSize: "12px", color: "#64748B", marginBottom: "14px" } },
+                        rOff.length,
+                        " libre(s) \u00B7 ",
+                        avail(repName),
+                        " d\u00EDas disponibles \u00B7 ",
+                        rDa.llamadas,
+                        "/d\u00EDa llamadas"),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "3px", marginBottom: "6px" } }, ["D", "L", "M", "X", "J", "V", "S"].map(d => React.createElement("div", { key: d, style: { textAlign: "center", fontSize: "9px", fontWeight: "700", color: "#94A3B8", padding: "2px" } }, d))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "3px", marginBottom: "14px" } },
+                        Array.from({ length: fdow }).map((_, i) => React.createElement("div", { key: i })),
+                        Array.from({ length: dInMo }).map((_, i) => {
+                            const d = i + 1, dk = `${yr}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                            const isOff = rOff.includes(dk), isTod = dk === tk;
+                            return React.createElement("button", { key: d, onClick: () => toggleDayOff(repName, dk), style: { padding: "4px 2px", borderRadius: "6px", border: `1.5px solid ${isOff ? "#F59E0B" : isTod ? "#2563EB" : "#E2E8F0"}`, background: isOff ? "#FEF3C7" : isTod ? "#EFF6FF" : "#FFF", cursor: "pointer", fontFamily: "inherit", fontSize: "11px", fontWeight: isOff || isTod ? "700" : "400", color: isOff ? "#92400E" : isTod ? "#1D4ED8" : "#334155", textAlign: "center" } },
+                                d,
+                                isOff && React.createElement("div", { style: { fontSize: "7px", lineHeight: 1 } }, "\uD83C\uDFD6\uFE0F"));
+                        })),
+                    React.createElement("button", { onClick: () => setShowDaysOff(false), style: { width: "100%", padding: "10px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "Listo"))));
+        })(),
+        React.createElement("div", { style: { background: "#FFF", borderBottom: "2px solid #E2E8F0", padding: "12px 16px", position: "sticky", top: 0, zIndex: 10, boxShadow: "0 1px 8px rgba(0,0,0,0.06)" } },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontSize: "10px", color: "#94A3B8", letterSpacing: "2px", textTransform: "uppercase" } }, "\uD83D\uDE97 Tracker"),
+                    React.createElement("div", { style: { fontSize: "16px", fontWeight: "700", color: "#0F172A" } }, repName)),
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "5px" } },
+                    saving && React.createElement("span", { style: { fontSize: "10px", color: "#2563EB" } }, "\u27F3"),
+                    React.createElement("button", { onClick: () => window.print(), style: { fontSize: "10px", color: "#059669", background: "#F0FDF4", border: "2px solid #BBF7D0", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontFamily: "inherit", fontWeight: "600" } }, "\uD83D\uDDA8\uFE0F"),
+                    React.createElement("button", { onClick: () => setShowDaysOff(true), style: { fontSize: "10px", color: "#D97706", background: "#FFFBEB", border: "2px solid #FDE68A", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontFamily: "inherit", fontWeight: "600" } },
+                        "\uD83C\uDFD6\uFE0F",
+                        rOff.length > 0 ? ` ${rOff.length}` : ""),
+                    React.createElement("div", { style: { background: "#FEF2F2", border: "2px solid #FECACA", borderRadius: "8px", padding: "4px 8px", textAlign: "center" } },
+                        React.createElement("div", { style: { fontSize: "7px", color: "#EF4444", fontWeight: "700" } }, "META"),
+                        React.createElement("div", { style: { fontSize: "16px", fontWeight: "800", color: "#DC2626", lineHeight: 1 } }, rG)),
+                    React.createElement("button", { onClick: () => { setView("login"); setRepName(""); }, style: { padding: "5px 10px", background: "#F8FAFC", border: "2px solid #E2E8F0", borderRadius: "8px", fontSize: "11px", fontWeight: "600", color: "#64748B", cursor: "pointer", fontFamily: "inherit" } }, "\u2190 Salir"))),
+            React.createElement("div", { style: { display: "flex", gap: "5px" } }, ["hoy", "semana", "mes", "reporte"].map(tb => (React.createElement("button", { key: tb, onClick: () => setTab(tb), style: { padding: "5px 12px", fontSize: "11px", letterSpacing: "1px", textTransform: "uppercase", fontWeight: "700", border: "2px solid", fontFamily: "inherit", borderColor: tab === tb ? "#2563EB" : "#E2E8F0", background: tab === tb ? "#2563EB" : "#FFF", color: tab === tb ? "#FFF" : "#64748B", borderRadius: "6px", cursor: "pointer" } }, tb))))),
+        React.createElement("div", { style: { padding: "14px", maxWidth: "600px", margin: "0 auto" } },
+            tab === "hoy" && (() => {
+                const isDayOff = rOff.includes(curKey), canE = canEdit(curKey);
+                return (React.createElement("div", null,
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } },
+                        React.createElement("button", { onClick: () => setDayOff(d => d - 1), style: NB }, "\u2190 Ayer"),
+                        React.createElement("div", { style: { textAlign: "center" } },
+                            React.createElement("div", { style: { fontSize: "14px", fontWeight: "700", color: isToday ? "#1D4ED8" : "#0F172A" } }, isToday ? "● Hoy" : fmtShort(curDay)),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#64748B" } }, fmtFull(curDay))),
+                        React.createElement("button", { onClick: () => { if (!isToday)
+                                setDayOff(d => d + 1); }, disabled: isToday, style: { ...NB, opacity: isToday ? 0.3 : 1 } }, "Ma\u00F1ana \u2192")),
+                    isDayOff ? (React.createElement("div", { style: { background: "#FFFBEB", border: "2px solid #FDE68A", borderRadius: "12px", padding: "20px", display: "flex", alignItems: "center", gap: "14px" } },
+                        React.createElement("span", { style: { fontSize: "32px" } }, "\uD83C\uDFD6\uFE0F"),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: "#92400E" } }, "D\u00EDa Libre / Vacaciones"),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#D97706", marginTop: "2px" } }, fmtShort(curDay))),
+                        React.createElement("button", { onClick: () => toggleDayOff(repName, curKey), style: { marginLeft: "auto", padding: "5px 12px", background: "#FEF2F2", border: "1.5px solid #FECACA", borderRadius: "6px", fontSize: "11px", fontWeight: "700", color: "#DC2626", cursor: "pointer", fontFamily: "inherit" } }, "Quitar"))) : (React.createElement("div", { style: { background: "#FFF", border: `2px solid ${isToday ? "#2563EB" : "#E2E8F0"}`, borderRadius: "12px", overflow: "hidden", boxShadow: isToday ? "0 4px 12px rgba(37,99,235,0.1)" : "0 1px 4px rgba(0,0,0,0.04)" } },
+                        React.createElement("div", { style: { background: isToday ? "#EFF6FF" : "#F8FAFC", padding: "10px 14px", borderBottom: `1px solid ${isToday ? "#BFDBFE" : "#E2E8F0"}`, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                            React.createElement("span", { style: { fontSize: "12px", fontWeight: "700", color: isToday ? "#1D4ED8" : "#475569", letterSpacing: "1px", textTransform: "uppercase" } },
+                                isToday ? "● Hoy — " : "",
+                                fmtShort(curDay)),
+                            getDayVal(repName, curKey, "ventas") > 0 && React.createElement("span", null, "\uD83C\uDFC6")),
+                        React.createElement("div", { style: { padding: "10px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } }, METRICS.map(metric => {
+                            const num = getDayVal(repName, curKey, metric), dGoal = rDa[metric], p = dGoal > 0 ? Math.min(100, Math.round((num / dGoal) * 100)) : 0, reached = num >= dGoal && dGoal > 0, isCall = metric === "llamadas";
+                            let ps = null;
+                            if (p >= 100)
+                                ps = "done";
+                            else if (p >= 75 && num > 0)
+                                ps = "ok";
+                            else if (num > 0)
+                                ps = "behind";
+                            return (React.createElement("div", { key: metric, style: { background: reached ? `${COLORS[metric]}08` : "#F8FAFC", border: `1.5px solid ${reached ? COLORS[metric] + "55" : "#E2E8F0"}`, borderRadius: "8px", padding: "8px 10px" } },
+                                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "5px" } },
+                                    React.createElement("span", { style: { fontSize: "10px", color: "#475569", fontWeight: "600" } },
+                                        ICONS[metric],
+                                        " ",
+                                        LABELS[metric]),
+                                    canE && React.createElement("button", { onClick: () => { if (isCall) {
+                                            setShowCallModal(curKey);
+                                            setCallName("");
+                                            setCallPhone("");
+                                            setCallErr("");
+                                        }
+                                        else
+                                            setClientModal({ metric, dateKey: curKey }); }, style: { fontSize: "9px", fontWeight: "700", padding: "2px 7px", background: COLORS[metric], color: "#FFF", border: "none", borderRadius: "4px", cursor: "pointer", fontFamily: "inherit" } },
+                                        "+ ",
+                                        isCall ? "Llamada" : "Agregar")),
+                                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px", marginBottom: "5px" } },
+                                    React.createElement("span", { style: { fontSize: "22px", fontWeight: "800", color: num > 0 ? COLORS[metric] : "#94A3B8" } }, num),
+                                    React.createElement("div", null,
+                                        React.createElement("span", { style: { fontSize: "10px", color: "#64748B" } },
+                                            "/ ",
+                                            dGoal),
+                                        reached && React.createElement("span", { style: { fontSize: "11px", color: COLORS[metric], marginLeft: "3px" } }, "\u2713"))),
+                                num > 0 && React.createElement("div", { style: { fontSize: "9px", color: COLORS[metric], fontWeight: "600", cursor: "pointer", marginBottom: "4px" }, onClick: () => { if (canE) {
+                                        if (isCall)
+                                            setShowCallModal(curKey);
+                                        else
+                                            setClientModal({ metric, dateKey: curKey });
+                                    } } },
+                                    " Ver ",
+                                    num,
+                                    " ",
+                                    isCall ? "llamada(s)" : "registro(s)",
+                                    " \u2192"),
+                                React.createElement(Bar, { actual: num, goal: dGoal, color: COLORS[metric] }),
+                                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "3px" } },
+                                    React.createElement("span", { style: { fontSize: "9px", fontWeight: "700", color: p >= 100 ? "#10B981" : p > 0 ? COLORS[metric] : "#CBD5E1" } },
+                                        p,
+                                        "%"),
+                                    ps && React.createElement(PaceBadge, { status: ps }))));
+                        }))))));
+            })(),
+            tab === "semana" && (React.createElement("div", null,
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } },
+                    React.createElement("button", { onClick: () => setSemOff(s => s - 1), style: NB }, "\u2190 Anterior"),
+                    React.createElement("span", { style: { fontSize: "11px", color: "#64748B", fontWeight: "600", textTransform: "uppercase", letterSpacing: "1px" } },
+                        fmtShort(semDays[0]),
+                        " \u2013 ",
+                        fmtShort(semDays[6])),
+                    React.createElement("button", { onClick: () => setSemOff(s => Math.min(0, s + 1)), disabled: semOff >= 0, style: { ...NB, opacity: semOff >= 0 ? 0.3 : 1 } }, "Siguiente \u2192")),
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" } },
+                        React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } }, "Resumen Semanal")),
+                    METRICS.map((metric, i) => {
+                        const total = semDays.reduce((s, d) => s + getDayVal(repName, dateKey(d), metric), 0), wGoal = rDa[metric] * 7, p = Math.min(100, wGoal > 0 ? Math.round((total / wGoal) * 100) : 0);
+                        const isTW = semOff === 0, dp = isTW ? t.getDay() + 1 : 7, st = isTW ? paceOf(total, wGoal, dp, 7) : null;
+                        return (React.createElement("div", { key: metric, style: { padding: "10px 16px", borderBottom: i < METRICS.length - 1 ? "1px solid #F1F5F9" : "none" } },
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "5px" } },
+                                React.createElement("span", { style: { fontSize: "13px", color: "#334155", fontWeight: "500" } },
+                                    ICONS[metric],
+                                    " ",
+                                    LABELS[metric]),
+                                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                                    st && React.createElement(PaceBadge, { status: st }),
+                                    React.createElement("span", { style: { fontSize: "13px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric] } },
+                                        total,
+                                        " ",
+                                        React.createElement("span", { style: { color: "#94A3B8", fontWeight: "400", fontSize: "11px" } },
+                                            "/ ",
+                                            wGoal)))),
+                            React.createElement(Bar, { actual: total, goal: wGoal, color: COLORS[metric] }),
+                            React.createElement("div", { style: { textAlign: "right", fontSize: "10px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric], marginTop: "3px" } },
+                                p,
+                                "%")));
+                    })))),
+            tab === "mes" && (React.createElement("div", null,
+                React.createElement("div", { style: { background: "#EFF6FF", border: "2px solid #BFDBFE", borderRadius: "10px", padding: "12px 16px", marginBottom: "14px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: "10px", color: "#1D4ED8", fontWeight: "700", letterSpacing: "2px", textTransform: "uppercase" } }, "Mes transcurrido"),
+                        React.createElement("div", { style: { fontSize: "11px", color: "#3B82F6", marginTop: "2px" } },
+                            "D\u00EDa ",
+                            elapsed,
+                            " de ",
+                            totalMo,
+                            " \u00B7 ",
+                            avail(repName),
+                            " d\u00EDas disponibles")),
+                    React.createElement("div", { style: { fontSize: "28px", fontWeight: "800", color: "#1D4ED8" } },
+                        Math.round((elapsed / totalMo) * 100),
+                        "%")),
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" } },
+                        React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } }, "Progreso del Mes")),
+                    METRICS.map((metric, i) => {
+                        const total = monthTotal(repName, metric), goal = rMo[metric], p = Math.min(100, goal > 0 ? Math.round((total / goal) * 100) : 0), st = paceOf(total, goal, elapsed, totalMo), isV = metric === "ventas";
+                        return (React.createElement("div", { key: metric, style: { padding: isV ? "13px 16px" : "10px 16px", background: isV ? "#FEF2F2" : "transparent", borderBottom: i < METRICS.length - 1 ? "1px solid #F1F5F9" : "none" } },
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "5px" } },
+                                React.createElement("span", { style: { fontSize: isV ? "14px" : "13px", fontWeight: isV ? "700" : "500", color: isV ? "#DC2626" : "#334155" } },
+                                    ICONS[metric],
+                                    " ",
+                                    LABELS[metric]),
+                                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                                    React.createElement(PaceBadge, { status: st }),
+                                    React.createElement("span", { style: { fontSize: isV ? "18px" : "14px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric] } },
+                                        total,
+                                        React.createElement("span", { style: { fontSize: "11px", color: "#94A3B8", fontWeight: "400" } },
+                                            " / ",
+                                            goal)))),
+                            React.createElement(Bar, { actual: total, goal: goal, color: COLORS[metric], h: isV ? 10 : 6 }),
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: "3px" } },
+                                React.createElement("span", { style: { fontSize: "10px", color: p >= 100 ? "#10B981" : "#94A3B8", fontWeight: p >= 100 ? "600" : "400" } }, goal - total > 0 ? `Faltan ${goal - total}` : "✓ Meta alcanzada"),
+                                React.createElement("span", { style: { fontSize: "10px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric] } },
+                                    p,
+                                    "%"))));
+                    })))),
+            tab === "reporte" && (React.createElement("div", null,
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", padding: "16px 18px", marginBottom: "14px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: "18px", fontWeight: "800", color: "#0F172A" } }, repName),
+                            React.createElement("div", { style: { fontSize: "13px", color: "#64748B", marginTop: "2px", textTransform: "capitalize" } },
+                                "Reporte \u00B7 ",
+                                t.toLocaleDateString("es-MX", { month: "long", year: "numeric" })),
+                            React.createElement("div", { style: { fontSize: "11px", color: "#94A3B8", marginTop: "2px" } },
+                                "Meta: ",
+                                rG,
+                                " ventas \u00B7 ",
+                                t.toLocaleDateString("es-MX"))),
+                        React.createElement("button", { onClick: () => window.print(), style: { padding: "8px 14px", background: "#2563EB", color: "#FFF", border: "none", borderRadius: "8px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit" } }, "\uD83D\uDDA8\uFE0F Imprimir"))),
+                React.createElement("div", { style: { background: "#FFF", border: "2px solid #E2E8F0", borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" } },
+                    React.createElement("div", { style: { padding: "10px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" } },
+                        React.createElement("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#64748B", fontWeight: "700", textTransform: "uppercase" } }, "Resumen del Mes")),
+                    METRICS.map((metric, i) => {
+                        const total = monthTotal(repName, metric), goal = rMo[metric], p = Math.min(100, goal > 0 ? Math.round((total / goal) * 100) : 0);
+                        return (React.createElement("div", { key: metric, style: { display: "flex", alignItems: "center", gap: "12px", padding: "10px 16px", background: metric === "ventas" ? "#FEF2F2" : "transparent", borderBottom: i < METRICS.length - 1 ? "1px solid #F1F5F9" : "none" } },
+                            React.createElement("div", { style: { fontSize: "16px" } }, ICONS[metric]),
+                            React.createElement("div", { style: { flex: 1 } },
+                                React.createElement("div", { style: { fontSize: "12px", fontWeight: "500", color: "#334155", marginBottom: "4px" } }, LABELS[metric]),
+                                React.createElement(Bar, { actual: total, goal: goal, color: COLORS[metric] })),
+                            React.createElement("div", { style: { textAlign: "right", minWidth: "70px" } },
+                                React.createElement("span", { style: { fontSize: "16px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric] } }, total),
+                                React.createElement("span", { style: { fontSize: "10px", color: "#94A3B8" } },
+                                    " / ",
+                                    goal),
+                                React.createElement("div", { style: { fontSize: "10px", fontWeight: "700", color: p >= 100 ? "#10B981" : COLORS[metric] } },
+                                    p,
+                                    "%"))));
+                    })))))));
+}
+const NB = { background: "#FFF", border: "2px solid #E2E8F0", color: "#64748B", fontSize: "11px", fontWeight: "600", padding: "5px 12px", borderRadius: "6px", cursor: "pointer", fontFamily: "inherit" };
+
+
+// Mount app
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
